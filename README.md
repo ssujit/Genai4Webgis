@@ -1,4 +1,4 @@
-# Master Thesis: [Your Thesis Title]
+# Master Thesis: Natural Language-Driven WebGIS: Designing, Implementing and Evaluating a Prototype for Urban Sustainability
 
 ## Overview
 
