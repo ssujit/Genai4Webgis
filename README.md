@@ -1,7 +1,7 @@
 # Master Thesis: Integrating Local Large Language Models into WebGIS: A Chat-Driven Framework for Natural-Language Interaction with Open Geospatial Data
 ## Overview
 
-This repository contains the code, data, and documentation, **"Natural Language-Driven WebGIS: Designing, Implementing and Evaluating a Prototype for Urban Sustainability"**.
+This repository contains the code, data, and documentation, **"Integrating Local Large Language Models into WebGIS: A Chat-Driven Framework for Natural-Language Interaction with Open Geospatial Data"**.
 
 ## Project Structure (YODA Principle)
 
