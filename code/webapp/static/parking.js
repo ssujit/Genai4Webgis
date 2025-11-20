@@ -1,21 +1,36 @@
-/* ---------------------------
-  Parking ChatMap — parking.js
-  Cleaned & structured
----------------------------- */
+/* ============================================================================
+ * Parking ChatMap — parking.js
+ * Master’s thesis prototype
+ *
+ * Responsibilities:
+ *  - Initialize Leaflet map and basemaps
+ *  - Manage layer list (uploaded GeoJSON + WFS layers)
+ *  - Provide a 2-point measurement tool
+ *  - Manage WFS connections and active datasource
+ *  - Wire the chat UI to the Flask /chat endpoint and apply returned actions
+ *  - Perform lightweight geocoding + “near me” resolution for parking searches
+ * ========================================================================== */
 
 console.log("parking.js loaded");
 
-/* ====== Config toggles ====== */
+/* ============================================================================
+ * Config toggles
+ * ========================================================================== */
 
-// If your backend API key isn't ready, set this to false to skip loading /api/parking.
+/**
+ * If your backend /api/parking endpoint is not ready,
+ * keep this false. (Currently we use only WFS as datasource.)
+ */
 const USE_BACKEND_PARKING = false;
 
-/* ====== DOM refs ====== */
+/* ============================================================================
+ * DOM references
+ * ========================================================================== */
 
 const lastUpdatedEl = document.getElementById("last-updated");
 const mapEl = document.getElementById("map");
 
-// Sidebar
+// Sidebar & layer list
 const sidebar = document.getElementById("sidebar");
 const addMenu = document.getElementById("addMenu");
 const btnAddData = document.getElementById("btnAddData");
@@ -40,38 +55,56 @@ const chatSend = document.getElementById("chat-send");
 const bmTrigger = document.getElementById("bm-trigger");
 const bmMenu = document.getElementById("bm-menu");
 
-// === Theme / loader / toast helpers ===
+// Theme / loader / toast helpers
 const themeToggle = document.getElementById("theme-toggle");
 const loader = document.getElementById("loader");
 const toastArea = document.getElementById("toasts");
 
-function showLoader(on=true){ if(loader) loader.style.display = on ? "flex" : "none"; }
-function toast(msg, type="ok", ms=2600){
-  if(!toastArea) return;
+/* ============================================================================
+ * UI helpers: loader + toast + theme
+ * ========================================================================== */
+
+/**
+ * Show/hide the global loader overlay.
+ */
+function showLoader(on = true) {
+  if (loader) loader.style.display = on ? "flex" : "none";
+}
+
+/**
+ * Small toast notification helper.
+ * Type can be "ok", "warn", "err" (CSS classes can style them differently).
+ */
+function toast(msg, type = "ok", ms = 2600) {
+  if (!toastArea) return;
   const el = document.createElement("div");
   el.className = `toast ${type}`;
   el.textContent = msg;
   toastArea.appendChild(el);
-  setTimeout(()=> el.remove(), ms);
+  setTimeout(() => el.remove(), ms);
 }
 
-// Init & toggle theme (persist)
-(function initTheme(){
+// Initialize theme from localStorage
+(function initTheme() {
   const t = localStorage.getItem("theme") || "dark";
   document.documentElement.setAttribute("data-theme", t);
 })();
-themeToggle?.addEventListener("click", ()=>{
+
+// Toggle dark / light theme and persist
+themeToggle?.addEventListener("click", () => {
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
   localStorage.setItem("theme", next);
 });
 
-
-/* ====== Map & basemaps ====== */
+/* ============================================================================
+ * Map & basemaps
+ * ========================================================================== */
 
 const map = L.map("map", { zoomControl: true }).setView([48.7758, 9.1829], 13);
 
+// Base layers
 let osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 20,
   attribution: "&copy; OpenStreetMap contributors",
@@ -82,120 +115,43 @@ let carto = L.tileLayer(
   { maxZoom: 20, attribution: "&copy; OpenStreetMap, &copy; CARTO" }
 );
 
-// === Measure tool ===
-const measureBtn = document.getElementById("measureBtn");
-if (measureBtn) {
-  measureBtn.addEventListener("click", () => {
-    measureActive = !measureActive;
-    measureBtn.classList.toggle("active", measureActive);
-
-    // reset state when turning off
-    if (!measureActive) {
-      if (measureLine) { map.removeLayer(measureLine); measureLine = null; }
-      measureMarkers.forEach(m => map.removeLayer(m));
-      measureMarkers = [];
-      measureStart = null;
-      toast && toast("Measure off","ok");
-    } else {
-      toast && toast("Click two points on the map to measure","ok");
-    }
-  });
-}
-
-// Click handler: pick two points and measure
-map.on("click", (e) => {
-  if (!measureActive) return;
-
-  if (!measureStart) {
-    // First point
-    measureStart = e.latlng;
-    const m1 = L.circleMarker(measureStart, {radius:6, weight:2}).addTo(map);
-    measureMarkers.push(m1);
-  } else {
-    // Second point -> compute & draw
-    const p2 = e.latlng;
-    const dist = map.distance(measureStart, p2); // meters
-    if (measureLine) map.removeLayer(measureLine);
-    measureLine = L.polyline([measureStart, p2], {weight:3, dashArray:"6,6"}).addTo(map);
-
-    const m2 = L.circleMarker(p2, {radius:6, weight:2}).addTo(map);
-    measureMarkers.push(m2);
-
-    // Popup at midpoint
-    const mid = L.latLng(
-      (measureStart.lat + p2.lat) / 2,
-      (measureStart.lng + p2.lng) / 2
-    );
-    L.popup({autoClose:true, closeOnClick:false})
-      .setLatLng(mid)
-      .setContent(`<b>${fmtMeters(dist)}</b>`)
-      .openOn(map);
-
-    // Prepare for a new measurement (two-point tool)
-    measureStart = null;
-  }
-});
-
-// ESC to cancel current measurement
-document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") {
-    measureStart = null;
-    if (measureLine) { map.removeLayer(measureLine); measureLine = null; }
-    measureMarkers.forEach(m => map.removeLayer(m));
-    measureMarkers = [];
-    toast && toast("Measurement cleared","warn");
-  }
-});
-
-
-// snap to your loaded points
-function snapToLayer(latlng, srcLayer, px=20){
-  if (!srcLayer) return latlng;
-  let best = { ll: latlng, d: Infinity };
-  const p0 = map.latLngToContainerPoint(latlng);
-  srcLayer.eachLayer(l => {
-    const ll = l.getLatLng ? l.getLatLng()
-              : (l.getBounds ? l.getBounds().getCenter() : null);
-    if (!ll) return;
-    const p = map.latLngToContainerPoint(ll);
-    const d = p.distanceTo(p0);
-    if (d < best.d) best = { ll, d };
-  });
-  return best.d <= px ? best.ll : latlng;
-}
-// then inside map.on("click", e) use:
-// const clicked = snapToLayer(e.latlng, window._lastDataLayer)  || e.latlng;
-
-
-// Satellite: Esri World Imagery (free, no key)
+// Satellite: Esri World Imagery (no key required)
 let sat = L.tileLayer(
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
   {
     maxZoom: 20,
-    attribution: "Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics"
+    attribution: "Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics",
   }
 );
 
 // Start with OSM by default
 let currentBase = osm.addTo(map);
 
-// Floating basemap picker behavior
+/* --------------------------------------------------------------------------
+ * Basemap picker UI
+ * ------------------------------------------------------------------------ */
+
 bmTrigger?.addEventListener("click", (e) => {
   e.stopPropagation();
-  bmMenu.style.display = (bmMenu.style.display === "none" || !bmMenu.style.display) ? "grid" : "none";
+  bmMenu.style.display =
+    bmMenu.style.display === "none" || !bmMenu.style.display ? "grid" : "none";
 });
+
+// Close menu when clicking outside
 document.addEventListener("click", (e) => {
   if (!bmMenu.contains(e.target) && e.target !== bmTrigger) {
     bmMenu.style.display = "none";
   }
 });
-bmMenu?.querySelectorAll(".bm-opt").forEach(btn => {
+
+// Switch basemap
+bmMenu?.querySelectorAll(".bm-opt").forEach((btn) => {
   btn.addEventListener("click", () => {
     // UI state
-    bmMenu.querySelectorAll(".bm-opt").forEach(b => b.classList.remove("active"));
+    bmMenu.querySelectorAll(".bm-opt").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
 
-    // swap base layer
+    // Swap base layer
     if (currentBase) map.removeLayer(currentBase);
     const key = btn.dataset.base;
     const next = { osm, carto, sat }[key] || osm;
@@ -205,9 +161,135 @@ bmMenu?.querySelectorAll(".bm-opt").forEach(btn => {
   });
 });
 
-// === Active datasource (persisted) ===
+/* ============================================================================
+ * Two-point distance measurement tool
+ * ========================================================================== */
+
+const measureBtn = document.getElementById("measureBtn");
+
+// Measure state
+let measureActive = false;
+let measureStart = null; // L.LatLng or null
+let measureLine = null; // L.Polyline
+let measureMarkers = []; // start / end markers
+
+/**
+ * Pretty-print distance in meters or kilometres.
+ */
+function fmtMeters(m) {
+  if (m < 1000) return `${m.toFixed(0)} m`;
+  const km = m / 1000;
+  return `${km.toFixed(km < 10 ? 2 : 1)} km`;
+}
+
+if (measureBtn) {
+  measureBtn.addEventListener("click", () => {
+    measureActive = !measureActive;
+    measureBtn.classList.toggle("active", measureActive);
+
+    if (!measureActive) {
+      // Reset state when turning off
+      if (measureLine) {
+        map.removeLayer(measureLine);
+        measureLine = null;
+      }
+      measureMarkers.forEach((m) => map.removeLayer(m));
+      measureMarkers = [];
+      measureStart = null;
+      toast && toast("Measure off", "ok");
+    } else {
+      toast && toast("Click two points on the map to measure", "ok");
+    }
+  });
+}
+
+// Handle map clicks: collect 2 points and show distance
+map.on("click", (e) => {
+  if (!measureActive) return;
+
+  if (!measureStart) {
+    // First point
+    measureStart = e.latlng;
+    const m1 = L.circleMarker(measureStart, { radius: 6, weight: 2 }).addTo(map);
+    measureMarkers.push(m1);
+  } else {
+    // Second point -> compute & draw
+    const p2 = e.latlng;
+    const dist = map.distance(measureStart, p2); // meters
+
+    if (measureLine) map.removeLayer(measureLine);
+    measureLine = L.polyline([measureStart, p2], { weight: 3, dashArray: "6,6" }).addTo(map);
+
+    const m2 = L.circleMarker(p2, { radius: 6, weight: 2 }).addTo(map);
+    measureMarkers.push(m2);
+
+    const mid = L.latLng(
+      (measureStart.lat + p2.lat) / 2,
+      (measureStart.lng + p2.lng) / 2
+    );
+    L.popup({ autoClose: true, closeOnClick: false })
+      .setLatLng(mid)
+      .setContent(`<b>${fmtMeters(dist)}</b>`)
+      .openOn(map);
+
+    // Ready for a new measurement
+    measureStart = null;
+  }
+});
+
+// ESC key to clear current measurement
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") {
+    measureStart = null;
+    if (measureLine) {
+      map.removeLayer(measureLine);
+      measureLine = null;
+    }
+    measureMarkers.forEach((m) => map.removeLayer(m));
+    measureMarkers = [];
+    toast && toast("Measurement cleared", "warn");
+  }
+});
+
+/**
+ * Snap a clicked location to the nearest feature in a given layer
+ * within a pixel tolerance. Helpful for measuring from existing points.
+ */
+function snapToLayer(latlng, srcLayer, px = 20) {
+  if (!srcLayer) return latlng;
+  let best = { ll: latlng, d: Infinity };
+  const p0 = map.latLngToContainerPoint(latlng);
+  srcLayer.eachLayer((l) => {
+    const ll = l.getLatLng
+      ? l.getLatLng()
+      : l.getBounds
+      ? l.getBounds().getCenter()
+      : null;
+    if (!ll) return;
+    const p = map.latLngToContainerPoint(ll);
+    const d = p.distanceTo(p0);
+    if (d < best.d) best = { ll, d };
+  });
+  return best.d <= px ? best.ll : latlng;
+}
+
+/* ============================================================================
+ * Active datasource & simple auth helpers (for WFS)
+ * ========================================================================== */
+
+/**
+ * ACTIVE_DS has the shape:
+ *   {
+ *     kind: "wfs",
+ *     url: "<base WFS URL>",
+ *     auth?: {
+ *       mode: "query" | "header",
+ *       name: "key",
+ *       value: "TOKEN"
+ *     }
+ *   }
+ */
 let ACTIVE_DS = JSON.parse(localStorage.getItem("active.datasource") || "null");
-// ACTIVE_DS = { kind:"wfs", url:"...", auth:{ mode:"query"|"header", name:"key", value:"TOKEN" } }
 
 function setActiveDataSource(ds) {
   ACTIVE_DS = ds;
@@ -215,31 +297,53 @@ function setActiveDataSource(ds) {
   toast("Datasource set.", "ok");
 }
 
-// Optional auth helpers (kept simple; safe no-op if unused)
+// Helpers to attach auth to URLs and fetch init options
 function applyAuthToUrl(url) {
   if (!ACTIVE_DS || !ACTIVE_DS.auth || ACTIVE_DS.auth.mode !== "query") return url;
   const u = new URL(url, location.origin);
   u.searchParams.set(ACTIVE_DS.auth.name, ACTIVE_DS.auth.value);
   return u.toString();
 }
+
 function applyAuthToFetchInit(init = {}) {
   if (!ACTIVE_DS || !ACTIVE_DS.auth || ACTIVE_DS.auth.mode !== "header") return init;
-  return { ...init, headers: { ...(init.headers||{}), [ACTIVE_DS.auth.name]: ACTIVE_DS.auth.value } };
+  return {
+    ...init,
+    headers: { ...(init.headers || {}), [ACTIVE_DS.auth.name]: ACTIVE_DS.auth.value },
+  };
 }
 
-// BBOX helpers
-function kmToDegLat(km){ return km / 111.0; }
-function kmToDegLon(km, lat){ const c = Math.cos(lat * Math.PI/180); return c ? km / (111.320*c) : 0; }
-function urlWithBbox(baseUrl, lat, lon, radiusKm){
+/* --------------------------------------------------------------------------
+ * BBOX helpers: convert radius in km to EPSG:4326 degrees
+ * ------------------------------------------------------------------------ */
+
+function kmToDegLat(km) {
+  return km / 111.0;
+}
+
+function kmToDegLon(km, lat) {
+  const c = Math.cos((lat * Math.PI) / 180);
+  return c ? km / (111.32 * c) : 0;
+}
+
+/**
+ * Create a WFS URL with a bbox parameter around [lat, lon].
+ */
+function urlWithBbox(baseUrl, lat, lon, radiusKm) {
   const dy = kmToDegLat(radiusKm);
   const dx = kmToDegLon(radiusKm, lat);
-  const minLon = lon - dx, minLat = lat - dy, maxLon = lon + dx, maxLat = lat + dy;
+  const minLon = lon - dx,
+    minLat = lat - dy,
+    maxLon = lon + dx,
+    maxLat = lat + dy;
   const sep = baseUrl.includes("?") ? "&" : "?";
   return `${baseUrl}${sep}bbox=${minLon},${minLat},${maxLon},${maxLat},CRS:84`;
 }
 
+/* ============================================================================
+ * Cluster layer for parking points (MarkerCluster)
+ * ========================================================================== */
 
-// Cluster layer for parking points
 const clusters = L.markerClusterGroup({
   spiderfyOnEveryZoom: false,
   showCoverageOnHover: false,
@@ -247,11 +351,13 @@ const clusters = L.markerClusterGroup({
 });
 map.addLayer(clusters);
 
-
-/* ====== Sidebar: menu & collapse ====== */
+/* ============================================================================
+ * Sidebar: menu & collapse behaviour
+ * ========================================================================== */
 
 btnAddData?.addEventListener("click", () => {
-  addMenu.style.display = (addMenu.style.display === "none" || !addMenu.style.display) ? "block" : "none";
+  addMenu.style.display =
+    addMenu.style.display === "none" || !addMenu.style.display ? "block" : "none";
 });
 
 let collapsed = false;
@@ -263,12 +369,19 @@ btnCollapse?.addEventListener("click", () => {
   addMenu.style.display = "none";
 });
 
-
-/* ====== Layer registry UI ====== */
+/* ============================================================================
+ * Layer registry UI (for uploaded / WFS layers)
+ * ========================================================================== */
 
 const userLayers = new Map(); // id -> { layer, name }
 let layerAutoId = 1;
 
+/**
+ * Register a Leaflet layer in the sidebar with:
+ *  - visibility checkbox
+ *  - "Zoom" button
+ *  - "Remove" button
+ */
 function addLayerToList(name, layer) {
   const id = `usr-${layerAutoId++}`;
   userLayers.set(id, { layer, name });
@@ -284,11 +397,14 @@ function addLayerToList(name, layer) {
   const [chk, , btnZoom, btnRemove] = row.children;
 
   chk.addEventListener("change", () => {
-    if (chk.checked) layer.addTo(map); else map.removeLayer(layer);
+    if (chk.checked) layer.addTo(map);
+    else map.removeLayer(layer);
   });
 
   btnZoom.addEventListener("click", () => {
-    try { map.fitBounds(layer.getBounds(), { padding: [20, 20] }); } catch {}
+    try {
+      map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+    } catch {}
   });
 
   btnRemove.addEventListener("click", () => {
@@ -300,8 +416,9 @@ function addLayerToList(name, layer) {
   layerList.prepend(row);
 }
 
-
-/* ====== Upload (GeoJSON) ====== */
+/* ============================================================================
+ * Upload local GeoJSON
+ * ========================================================================== */
 
 document.getElementById("menuUpload")?.addEventListener("click", () => {
   addMenu.style.display = "none";
@@ -318,7 +435,9 @@ fileInput.addEventListener("change", async (e) => {
       pointToLayer: (_f, latlng) => L.circleMarker(latlng, { radius: 5 }),
     }).addTo(map);
     addLayerToList(file.name.replace(/\.[^/.]+$/, ""), layer);
-    try { map.fitBounds(layer.getBounds(), { padding: [20, 20] }); } catch {}
+    try {
+      map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+    } catch {}
   } catch (err) {
     alert("Failed to load GeoJSON: " + err.message);
   } finally {
@@ -326,8 +445,9 @@ fileInput.addEventListener("change", async (e) => {
   }
 });
 
-
-/* ====== WFS modal (Mundi-style) ====== */
+/* ============================================================================
+ * WFS modal: connect and add remote vector data
+ * ========================================================================== */
 
 document.getElementById("menuWfs")?.addEventListener("click", () => {
   addMenu.style.display = "none";
@@ -341,26 +461,30 @@ wfsCancel?.addEventListener("click", () => {
   wfsModal.style.display = "none";
 });
 
+/**
+ * Connect to a WFS GetFeature URL (optionally restricted to current map bbox),
+ * load it as a GeoJSON layer, add to map + layer list, and set it as
+ * ACTIVE_DS for later LLM-powered parking queries.
+ */
 wfsConnect?.addEventListener("click", async () => {
   const urlInput = wfsFullUrl.value.trim();
   const name = wfsLayerName.value.trim() || "WFS Layer";
+
   if (!/^https?:\/\//i.test(urlInput)) {
     wfsStatus.textContent = "Please enter a valid WFS URL.";
     wfsStatus.style.color = "crimson";
     return;
   }
 
-  // ---- Add map bounding box filter ----
+  // Add map bounding box filter (if user didn't specify one)
   const bounds = map.getBounds();
   const bboxParam = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()},CRS:84`;
-
-  // If the user pasted a base URL (no bbox yet), append it
   const hasBbox = urlInput.includes("bbox=");
   const url = hasBbox
-    ? urlInput  // user already defined bbox
+    ? urlInput
     : urlInput.includes("?")
-      ? `${urlInput}&bbox=${bboxParam}`
-      : `${urlInput}?bbox=${bboxParam}`;
+    ? `${urlInput}&bbox=${bboxParam}`
+    : `${urlInput}?bbox=${bboxParam}`;
 
   console.log("Fetching WFS within current map view:", url);
 
@@ -377,25 +501,33 @@ wfsConnect?.addEventListener("click", async () => {
         const p = f.properties || {};
         const html = Object.keys(p)
           .slice(0, 10)
-          .map(k => `<b>${k}:</b> ${p[k]}`)
+          .map((k) => `<b>${k}:</b> ${p[k]}`)
           .join("<br>");
         l.bindPopup(html || name);
       },
-      pointToLayer: (_f, latlng) => L.circleMarker(latlng, { radius: 5 })
+      pointToLayer: (_f, latlng) => L.circleMarker(latlng, { radius: 5 }),
     }).addTo(map);
 
     addLayerToList(name, layer);
-        window._lastDataLayer = layer; // keep a reference so chat can filter it
-    setActiveDataSource({ kind:"wfs", url }); // make the just-added WFS the active datasource for chat
+
+    // Keep a reference so chat can filter nearest points later
+    window._lastDataLayer = layer;
+
+    // Make the just-added WFS the active datasource for chat
+    setActiveDataSource({ kind: "wfs", url });
+
+    // Persist WFS layer info (for future extensions)
     try {
-      const rec = { type:"wfs", name, url };   // <-- fixed (was fullUrl)
+      const rec = { type: "wfs", name, url };
       const saved = JSON.parse(localStorage.getItem("layers.wfs") || "[]");
       saved.push(rec);
       localStorage.setItem("layers.wfs", JSON.stringify(saved));
-      toast(`Added WFS layer: ${name}`,"ok");
+      toast(`Added WFS layer: ${name}`, "ok");
     } catch {}
 
-    try { map.fitBounds(layer.getBounds(), { padding: [20, 20] }); } catch {}
+    try {
+      map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+    } catch {}
 
     wfsStatus.textContent = "Layer added successfully (within view).";
     wfsStatus.style.color = "lightgreen";
@@ -406,16 +538,22 @@ wfsConnect?.addEventListener("click", async () => {
   }
 });
 
+/* ============================================================================
+ * Parking layer based on active WFS datasource
+ * ========================================================================== */
 
-/* ====== Parking layer (backend) ====== */
-let parkingAbort = null;   // <— declare globals once
+let parkingAbort = null;
 let parkingLayer = null;
 
+/**
+ * Load parking features from the ACTIVE_DS WFS within a radius (km)
+ * around [lat, lon], and render them as a clustered circleMarker layer.
+ */
 async function loadParking(opts = {}) {
   const { lat, lon, radius_km = 2 } = opts;
 
   if (!ACTIVE_DS || ACTIVE_DS.kind !== "wfs") {
-    console.warn("No active datasource set. Use the WFS button or tell the chat: 'Use this WFS ...'");
+    console.warn("No active datasource set. Add a WFS first.");
     toast("No datasource set. Add a WFS first.", "warn");
     return;
   }
@@ -442,67 +580,97 @@ async function loadParking(opts = {}) {
     parkingLayer = L.geoJSON(data, {
       onEachFeature: (f, l) => {
         const p = f.properties || {};
-        const html = Object.keys(p).slice(0,10).map(k => `<b>${k}:</b> ${p[k]}`).join("<br>");
+        const html = Object.keys(p)
+          .slice(0, 10)
+          .map((k) => `<b>${k}:</b> ${p[k]}`)
+          .join("<br>");
         l.bindPopup(html || "Parking");
       },
-      pointToLayer: (_f, ll) => L.circleMarker(ll, { radius: 6, weight: 1, fillOpacity: 0.85 })
+      pointToLayer: (_f, ll) =>
+        L.circleMarker(ll, { radius: 6, weight: 1, fillOpacity: 0.85 }),
     });
 
     clusters.addLayer(parkingLayer);
-    try { map.fitBounds(parkingLayer.getBounds(), { maxZoom: 16, padding: [20, 20] }); } catch {}
+    try {
+      map.fitBounds(parkingLayer.getBounds(), {
+        maxZoom: 16,
+        padding: [20, 20],
+      });
+    } catch {}
   } catch (err) {
-    if (err.name !== "AbortError") console.error("Active WFS fetch failed:", err);
+    if (err.name !== "AbortError")
+      console.error("Active WFS fetch failed:", err);
   } finally {
     showLoader(false);
   }
 }
 
-// --- Measure state ---
-let measureActive = false;
-let measureStart = null;     // L.LatLng or null
-let measureLine = null;      // L.Polyline
-let measureMarkers = [];     // start/end markers
-function fmtMeters(m){
-  if (m < 1000) return `${m.toFixed(0)} m`;
-  const km = m / 1000;
-  return `${km.toFixed(km < 10 ? 2 : 1)} km`;
-}
+// Expose for debugging or manual calls from the console
+window.loadParking = loadParking;
 
-// Add a highlight layer + helper
+/* ============================================================================
+ * Highlight nearby features from the active layer
+ * ========================================================================== */
+
 let nearbyLayer = null;
 
-function highlightNearbyFromLayer(srcLayer, lat, lon, radiusKm=2){
-  if (!srcLayer) { console.warn("No data layer to filter."); return; }
-  if (nearbyLayer) { map.removeLayer(nearbyLayer); nearbyLayer = null; }
+/**
+ * Highlight features from srcLayer that fall within radiusKm of [lat, lon].
+ * Used after an LLM parking query to visually emphasise relevant features.
+ */
+function highlightNearbyFromLayer(srcLayer, lat, lon, radiusKm = 2) {
+  if (!srcLayer) {
+    console.warn("No data layer to filter.");
+    return;
+  }
+  if (nearbyLayer) {
+    map.removeLayer(nearbyLayer);
+    nearbyLayer = null;
+  }
 
   const center = L.latLng(lat, lon);
   const radiusM = (radiusKm || 2) * 1000;
   const hits = [];
 
-  srcLayer.eachLayer(l => {
-    // works for markers/circleMarkers; fallback for polygons/lines uses centroid
-    const ll = l.getLatLng ? l.getLatLng()
-            : (l.getBounds ? l.getBounds().getCenter() : null);
+  srcLayer.eachLayer((l) => {
+    const ll = l.getLatLng
+      ? l.getLatLng()
+      : l.getBounds
+      ? l.getBounds().getCenter()
+      : null;
     if (!ll) return;
     if (center.distanceTo(ll) <= radiusM) {
-      // keep original feature to re-render in a different style
       if (l.feature) hits.push(l.feature);
     }
   });
 
-  if (!hits.length) { toast && toast("No points within radius.", "warn"); return; }
+  if (!hits.length) {
+    toast && toast("No points within radius.", "warn");
+    return;
+  }
 
-  nearbyLayer = L.geoJSON({ type:"FeatureCollection", features:hits }, {
-    pointToLayer: (_f, ll) => L.circleMarker(ll, { radius: 7, color: "#c00", weight: 2, fillOpacity: 0.9 })
-  }).addTo(map);
+  nearbyLayer = L.geoJSON(
+    { type: "FeatureCollection", features: hits },
+    {
+      pointToLayer: (_f, ll) =>
+        L.circleMarker(ll, {
+          radius: 7,
+          color: "#c00",
+          weight: 2,
+          fillOpacity: 0.9,
+        }),
+    }
+  ).addTo(map);
 }
 
+/* ============================================================================
+ * Chat wiring (frontend part of LLM interaction)
+ * ========================================================================== */
 
-// Expose for the Refresh button in the status bar
-window.loadParking = loadParking;
-
-/* ====== Chat wiring ====== */
-
+/**
+ * Append a message to the chat log.
+ * who = "you" (user) or "bot" (LLM).
+ */
 function addLog(text, who = "bot") {
   if (!chatLog) return;
   const msg = document.createElement("div");
@@ -512,8 +680,13 @@ function addLog(text, who = "bot") {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-
-// --- Execute actions from /chat (setView | loadParking | loadWFS)
+/**
+ * Execute an array of actions produced by the /chat endpoint.
+ * Supported action types:
+ *   - setView
+ *   - loadParking
+ *   - loadWFS
+ */
 async function applyActions(actions = []) {
   for (const a of actions || []) {
     try {
@@ -521,36 +694,46 @@ async function applyActions(actions = []) {
         case "setView": {
           const { lat, lon, zoom } = a;
           if (typeof lat === "number" && typeof lon === "number") {
-            map.setView([lat, lon], typeof zoom === "number" ? zoom : map.getZoom());
+            map.setView(
+              [lat, lon],
+              typeof zoom === "number" ? zoom : map.getZoom()
+            );
           }
           break;
         }
+
         case "loadParking": {
           let { city, lat, lon, radiusKm, place, nearMe } = a;
 
-          // If the model passed only “city”, use it as a geocode hint.
+          // If the model only provided "city", use it as a place hint.
           if (!place && city) place = city;
 
           const loc = await resolveLocation({
-            lat, lon,
+            lat,
+            lon,
             place,
-            preferUser: !!nearMe // when user says “near me”
+            preferUser: !!nearMe, // "near me"
           });
 
           await loadParking({
             city,
             lat: loc.lat,
             lon: loc.lon,
-            radius_km: typeof radiusKm === "number" ? radiusKm : 5
+            radius_km: typeof radiusKm === "number" ? radiusKm : 5,
           });
-          // highlight from the user's loaded layer
+
+          // Highlight subset around the resolved location
           if (window._lastDataLayer) {
-            highlightNearbyFromLayer(window._lastDataLayer, loc.lat, loc.lon, 
-                                    typeof radiusKm === "number" ? radiusKm : 5);
+            highlightNearbyFromLayer(
+              window._lastDataLayer,
+              loc.lat,
+              loc.lon,
+              typeof radiusKm === "number" ? radiusKm : 5
+            );
           } else {
-            console.warn("No WFS layer loaded via button; nothing to filter.");
+            console.warn("No WFS layer loaded; nothing to filter.");
           }
-          // Optionally set view if not already
+
           map.setView([loc.lat, loc.lon], 13);
           break;
         }
@@ -565,17 +748,29 @@ async function applyActions(actions = []) {
             pointToLayer: (_f, ll) => L.circleMarker(ll, { radius: 5 }),
           }).addTo(map);
           addLayerToList("WFS", layer);
-          try { map.fitBounds(layer.getBounds(), { padding: [20, 20] }); } catch {}
+          try {
+            map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+          } catch {}
           break;
         }
       }
-    } catch (e) { console.error("Action failed:", a, e); }
+    } catch (e) {
+      console.error("Action failed:", a, e);
+    }
   }
 }
 
-// --- Chat: now consumes { reply, actions[] } (NO L.geoJSON here)
+/**
+ * Send a user message to the Flask /chat endpoint and display the reply.
+ * The backend returns:
+ *   {
+ *     reply: "short user-facing message",
+ *     actions: [ ... ]
+ *   }
+ */
 async function runChat(message) {
   addLog(message, "you");
+
   const typing = document.createElement("div");
   typing.className = "typing";
   typing.textContent = "Assistant is typing…";
@@ -587,7 +782,10 @@ async function runChat(message) {
     const res = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, center: { lat: ctr.lat, lon: ctr.lng } }),
+      body: JSON.stringify({
+        message,
+        center: { lat: ctr.lat, lon: ctr.lng },
+      }),
     });
     const payload = await res.json();
     typing.remove();
@@ -600,75 +798,109 @@ async function runChat(message) {
   }
 }
 
-
+// Basic chat UI events
 if (chatSend && chatInput) {
   chatSend.addEventListener("click", () => {
     const t = chatInput.value.trim();
-    if (t) { runChat(t); chatInput.value = ""; }
+    if (t) {
+      runChat(t);
+      chatInput.value = "";
+    }
   });
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") chatSend.click();
   });
 }
 
-// parking.js (top-level helpers)
-const geocodeCache = new Map(); // q -> {lat,lon,name}
+/* ============================================================================
+ * Geocoding + "near me" helpers
+ * ========================================================================== */
 
-function normalizePlaceText(t="") {
+const geocodeCache = new Map(); // q -> {lat, lon, name}
+
+/**
+ * Small normalisation for place names: expands abbreviations like "Hbf".
+ */
+function normalizePlaceText(t = "") {
   return t
     .replace(/\bHbf\b/gi, "Hauptbahnhof")
     .replace(/\bStn\b/gi, "Station")
     .trim();
 }
 
+/**
+ * Call the Flask /geocode endpoint with a free-text query.
+ * Optionally bias by current map bounds.
+ */
 async function geocodeFreeText(query, biasBounds) {
   const q = normalizePlaceText(query);
   if (geocodeCache.has(q)) return geocodeCache.get(q);
 
-  // bias using current map bounds; restrict to Germany for precision
   const b = biasBounds || map.getBounds();
   const viewbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
 
-  const url = `/geocode?q=${encodeURIComponent(q)}&viewbox=${encodeURIComponent(viewbox)}&countrycodes=de`;
+  const url = `/geocode?q=${encodeURIComponent(
+    q
+  )}&viewbox=${encodeURIComponent(viewbox)}&countrycodes=de`;
   const res = await fetch(url);
-  const data = await res.json().catch(()=> ({}));
+  const data = await res.json().catch(() => ({}));
+
   if (data.ok) {
-    geocodeCache.set(q, { lat: data.lat, lon: data.lon, name: data.name });
-    return { lat: data.lat, lon: data.lon, name: data.name };
+    const hit = { lat: data.lat, lon: data.lon, name: data.name };
+    geocodeCache.set(q, hit);
+    return hit;
   }
   return null;
 }
 
+/**
+ * Request the user's browser location once (if permission is granted).
+ */
 function getBrowserLocationOnce() {
   return new Promise((resolve) => {
     if (!navigator.geolocation) return resolve(null);
     navigator.geolocation.getCurrentPosition(
-      pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      _err => resolve(null),
+      (pos) =>
+        resolve({
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+        }),
+      () => resolve(null),
       { enableHighAccuracy: true, timeout: 6000 }
     );
   });
 }
 
-// The ONE resolver to rule them all
-async function resolveLocation({ lat, lon, place, preferUser=false }) {
-  // 1) Explicit coords from action
-  if (typeof lat === "number" && typeof lon === "number") return { lat, lon, source: "action" };
+/**
+ * Resolve the location to use for a parking query.
+ * Priority:
+ *  1) Explicit lat/lon from the LLM action
+ *  2) Device location ("near me")
+ *  3) Geocode text (station, POI, etc.)
+ *  4) Current map center as a fallback
+ */
+async function resolveLocation({ lat, lon, place, preferUser = false }) {
+  // 1) explicit coordinates from action
+  if (typeof lat === "number" && typeof lon === "number") {
+    return { lat, lon, source: "action" };
+  }
 
-  // 2) “near me”
+  // 2) "near me" -> device location
   if (preferUser) {
     const me = await getBrowserLocationOnce();
     if (me) return { ...me, source: "device" };
   }
 
-  // 3) Map center as a decent fallback context
+  // 3) Map center as default context
   const ctr = map.getCenter();
   const centerGuess = { lat: ctr.lat, lon: ctr.lng, source: "center" };
 
-  // 4) Free-text geocode (Hbf, street, POI, etc.)
+  // 4) Optional free-text geocoding
   if (place && place.trim()) {
     const hit = await geocodeFreeText(place);
-    if (hit) return { lat: hit.lat, lon: hit.lon, source: "geocode", name: hit.name };
+    if (hit) {
+      return { lat: hit.lat, lon: hit.lon, source: "geocode", name: hit.name };
+    }
   }
 
   return centerGuess;
