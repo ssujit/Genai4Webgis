@@ -57,7 +57,7 @@ def _nominatim_query(q: str) -> Dict[str, float] | None:
 
     Uses a small LRU cache to avoid hammering the service with repeated queries.
     """
-    params = {"q": q, "format": "json", "limit": 1}
+    params = {"q": q, "format": "json", "limit": 5, "countrycodes": "de"}
     r = requests.get(
         "https://nominatim.openstreetmap.org/search",
         params=params,
@@ -69,10 +69,26 @@ def _nominatim_query(q: str) -> Dict[str, float] | None:
     if not arr:
         return None
 
+    # Prefer more "specific" objects over broad areas.
+    # (amenity/railway/building/tourism etc. usually better than a city boundary)
+    def score(item):
+        cls = (item.get("class") or "")
+        typ = (item.get("type") or "")
+        imp = float(item.get("importance") or 0)
+
+        bonus = 0
+        if cls in ("railway", "amenity", "building", "tourism", "shop", "office", "highway"):
+            bonus += 2
+        if typ in ("station", "train_station", "tram_stop", "bus_station"):
+            bonus += 2
+
+        return bonus + imp
+
+    best = max(arr, key=score)
     return {
-        "name": arr[0].get("display_name"),
-        "lat": float(arr[0]["lat"]),
-        "lon": float(arr[0]["lon"]),
+        "name": best.get("display_name"),
+        "lat": float(best["lat"]),
+        "lon": float(best["lon"]),
     }
 
 
@@ -133,7 +149,26 @@ client = OpenAI(
 
 MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct-q4_K_M")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "256"))
-REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "120"))
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "180"))
+
+def warmup_ollama() -> None:
+    try:
+        client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "Return STRICT JSON: {\"reply\":\"ok\",\"actions\":[]}"},
+                {"role": "user", "content": "warmup"},
+            ],
+            temperature=0,
+            max_tokens=128,
+            response_format={"type": "json_object"},
+            timeout=30,
+        )
+        print("Ollama warmup: OK")
+    except Exception as e:
+        print("Ollama warmup: FAILED", repr(e))
+
+warmup_ollama()
 
 SYSTEM_PROMPT = """
 You are the WebGIS Action Planner for a chat-driven mapping application.
@@ -203,6 +238,10 @@ Use when the user asks for parking, for example:
 If the user only gives a city, set "place" to that city.
 If the user says "near me" or "around me", set "nearMe": true and default "radiusKm": 2.
 If only a city is given, default "radiusKm": 5.
+If the user specifies distance in meters (m), convert it to kilometers:
+radiusKm = meters / 1000.
+Example: "within 200 m" → radiusKm = 0.2
+
 
 ────────────────────────────────────────────────────────
 
@@ -289,6 +328,49 @@ Use when the user asks:
 "count the features"
 "how many have realtime data?"
 
+7) filterWithin  (highlight features within a radius)
+
+{
+  "type": "filterWithin",
+  "place": "<string>"?,     // preferred
+  "lat": <number>?,         // only if user provides coords
+  "lon": <number>?,
+  "radiusM": <number>
+}
+
+Use when user asks:
+"show parking within 200m of Karlsruhe Hbf"
+"points within 100 meters of X"
+
+8) findByAttribute (find/highlight features by attribute match)
+
+{
+  "type": "findByAttribute",
+  "field": "<string>",      // e.g., "id", "address", "name"
+  "values": ["<string>", "<string>", "..."],      // user’s search text
+  "limit": <number>?        // optional, default 20
+}
+
+Use when user asks:
+"show id 34399"
+"find address Grüne Meile"
+"search Heidelberg"
+"find parking named X"
+Rules:
+If user says “id”, set field="id" and value="<number as string>".
+If user says “address”, set field="address".
+If user doesn’t specify field, use field="*".
+
+9) openAttributeTable  (open the attribute table for the active layer)
+
+{
+  "type": "openAttributeTable"
+}
+
+Use when the user says:
+"open attribute table"
+"show attribute table"
+"open table"
 
 ────────────────────────────────────────────────────────
 BEHAVIOR GUIDANCE
@@ -393,6 +475,23 @@ RESPONSE_SCHEMA: Dict[str, Any] = {
                         "additionalProperties": False,
                     },
                     {
+                        # filterWithin (highlight features within radius of a place/coords)
+                        "required": ["type"],
+                        "properties": {
+                            "type": {"const": "filterWithin"},
+                            "place": {"type": "string"},
+                            "lat": {"type": "number"},
+                            "lon": {"type": "number"},
+                            "radiusM": {"type": "number"},
+                        },
+                        "anyOf": [
+                            {"required": ["type", "place", "radiusM"]},
+                            {"required": ["type", "lat", "lon", "radiusM"]},
+                        ],
+                        "additionalProperties": False,
+                    },
+
+                    {
                         # loadParking (all fields optional except type)
                         "required": ["type"],
                         "properties": {
@@ -416,6 +515,15 @@ RESPONSE_SCHEMA: Dict[str, Any] = {
                         "additionalProperties": False,
                     },
                     {
+                        # openAttributeTable
+                        "required": ["type"],
+                        "properties": {
+                            "type": {"const": "openAttributeTable"},
+                        },
+                        "additionalProperties": False,
+                    },
+
+                    {
                         # describeLayer
                         "required": ["type"],
                         "properties": {
@@ -433,6 +541,22 @@ RESPONSE_SCHEMA: Dict[str, Any] = {
                         },
                         "additionalProperties": False,
                     },
+                    {
+                        # show point
+                        "required": ["type", "field", "values"],
+                        "properties": {
+                            "type": { "const": "findByAttribute" },
+                            "field": { "type": "string" },
+                            "values": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 1
+                            },
+                            "limit": { "type": "number" }
+                        },
+                        "additionalProperties": False
+                    },
+
 
                     {
                         # measureDistance (places or coords for A and B)
@@ -505,25 +629,69 @@ def rule_fallback(user_message: str, center: Dict[str, float]) -> Dict[str, Any]
             ],
         }
 
-
     # --- Parking fallback ---
     if "parking" in msg:
-        city = "stuttgart"
-        for c in ["stuttgart", "karlsruhe", "heidelberg", "mannheim", "ulm"]:
-            if c in msg:
-                city = c
+        text = user_message or ""
+
+        # radius: support "500m" or "2 km"
+        radius_km = 5
+        m_m = re.search(r"(\d+(?:\.\d+)?)\s*m\b", text, re.IGNORECASE)
+        m_km = re.search(r"(\d+(?:\.\d+)?)\s*km\b", text, re.IGNORECASE)
+        if m_m:
+            radius_km = float(m_m.group(1)) / 1000.0
+        elif m_km:
+            radius_km = float(m_km.group(1))
+
+        # place: support "of Karlsruhe Hbf"
+        place = None
+        m_place = re.search(r"\b(?:of|from|near)\s+(.+)$", text, re.IGNORECASE)
+        if m_place:
+            place = m_place.group(1).strip()
+
         return {
-            "reply": f"Loading parking near {city.title()}.",
+            "reply": "Loading parking near your requested location.",
             "actions": [
-                {
-                    "type": "setView",
-                    "lat": center.get("lat", 48.7758),
-                    "lon": center.get("lon", 9.1829),
-                    "zoom": 12,
-                },
-                {"type": "loadParking", "city": city, "radiusKm": 10},
+                {"type": "loadParking", "place": place or "", "radiusKm": radius_km},
             ],
         }
+
+    # --- Find by ID / attribute fallback (FIXED: uses "values") ---
+
+    # 1) Multiple IDs: "show id 34897, 36975 and 34912" / "show id:34897"
+    m_multi = re.search(r"\bid\b", user_message or "", re.IGNORECASE)
+    if m_multi:
+        ids = re.findall(r"\b\d+\b", user_message or "")
+        if ids:
+            ids = list(dict.fromkeys(ids))  # unique, keep order
+            return {
+                "reply": f"Finding {len(ids)} feature(s) by id.",
+                "actions": [
+                    {"type": "findByAttribute", "field": "id", "values": ids, "limit": 50}
+                ],
+            }
+
+    # 2) Single ID (still fine, but also uses "values")
+    m_id = re.search(r"\b(?:show|find|search)\s+id\s*[:#]?\s*(\d+)\b", user_message or "", re.IGNORECASE)
+    if m_id:
+        val = m_id.group(1)
+        return {
+            "reply": f"Finding feature with id {val}.",
+            "actions": [
+                {"type": "findByAttribute", "field": "id", "values": [val], "limit": 20}
+            ],
+        }
+
+    # 3) Address
+    m_addr = re.search(r"\b(?:show|find|search)\s+address\s+(.+)$", user_message or "", re.IGNORECASE)
+    if m_addr:
+        val = m_addr.group(1).strip()
+        return {
+            "reply": "Searching features by address.",
+            "actions": [
+                {"type": "findByAttribute", "field": "address", "values": [val], "limit": 20}
+            ],
+        }
+
         
     # --- CountLayer fallback ---
     if "how many" in msg or "count" in msg:
@@ -548,7 +716,7 @@ def rule_fallback(user_message: str, center: Dict[str, float]) -> Dict[str, Any]
         #  - "distance between A and B"
         #  - "distance from A to B"
         text = user_message or ""
-        m = re.search(r"between\s+(.+)\s+and\s+(.+)", text, re.IGNORECASE)
+        m = re.search(r"between\s+(.+?)\s+(?:and|to)\s+(.+)", text, re.IGNORECASE)
         if not m:
             m = re.search(r"from\s+(.+)\s+to\s+(.+)", text, re.IGNORECASE)
 
@@ -571,6 +739,13 @@ def rule_fallback(user_message: str, center: Dict[str, float]) -> Dict[str, Any]
         return {
             "reply": "I could not read the two places. Try 'distance between A and B'.",
             "actions": [],
+        }
+        
+    # open attribute table
+    if "attribute table" in msg or "open table" in msg or "show table" in msg:
+        return {
+            "reply": "Opening the attribute table.",
+            "actions": [{"type": "openAttributeTable"}],
         }
 
 
@@ -635,6 +810,18 @@ def call_llm(messages: List[Dict[str, str]]) -> Tuple[bool, Dict[str, Any], str]
         print("LLM ERROR:", repr(e))
         return False, {}, str(e)
 
+# ---------------------------------------------------------------------------
+# Ollama Warmup
+# ---------------------------------------------------------------------------
+
+@app.get("/ollama-warmup")
+def ollama_warmup():
+    msgs = [
+        {"role": "system", "content": 'Return STRICT JSON: {"reply":"ok","actions":[]}'},
+        {"role": "user", "content": "warmup"},
+    ]
+    ok, payload, err = call_llm(msgs)
+    return jsonify({"ok": ok, "error": err, "result": payload})
 
 # ---------------------------------------------------------------------------
 # LLM test endpoint
@@ -694,6 +881,8 @@ def chat():
     body = request.get_json(force=True) or {}
     msg = (body.get("message") or "").strip()
     center = body.get("center") or {}
+    
+    mode = request.args.get("mode", "auto")  # auto | llm | fallback
 
     if not msg:
         return jsonify({"reply": "Please type a message.", "actions": [], "meta": {"decision_source": "system"}})
@@ -712,10 +901,13 @@ def chat():
     ]
 
     ok, payload, err = call_llm(msgs)
+    
     dt_ms = int((time.time() - t0) * 1000)
 
+    # -------------------------------
+    # LLM path
+    # -------------------------------
     if ok:
-        # --- Explainability meta (LLM path) ---
         actions = payload.get("actions") or []
         payload["meta"] = {
             "request_id": request_id,
@@ -729,8 +921,22 @@ def chat():
         }
         return jsonify(payload)
 
-    # --- Fallback (rule-based path) ---
+    # -------------------------------
+    # LLM-only mode (NO fallback)
+    # -------------------------------
+    if mode == "llm":
+        return jsonify({
+            "ok": False,
+            "decision_source": "ollama",
+            "error": err,
+            "latency_ms": dt_ms
+        }), 500
+
+    # -------------------------------
+    # Auto mode (default) OR fallback mode
+    # -------------------------------
     fb = rule_fallback(msg, center)
+
     try:
         validate_or_raise(fb)
         schema_ok = True
@@ -744,12 +950,12 @@ def chat():
         "schema_valid": schema_ok,
         "lat": center.get("lat"),
         "lon": center.get("lon"),
-        "llm_error": err,           # keep for evaluation/debug; you can hide in UI later
+        "llm_error": err,
         "latency_ms": dt_ms,
         "action_types": [a.get("type") for a in (fb.get("actions") or []) if isinstance(a, dict)],
     }
-    return jsonify(fb)
 
+    return jsonify(fb)
 
 # ---------------------------------------------------------------------------
 # Entry point for local development

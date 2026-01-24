@@ -335,13 +335,24 @@ function addLayerToList(name, layer) {
 
   const row = document.createElement("div");
   row.className = "layer-row";
+  row.style.position = "relative";
   row.innerHTML = `
     <input type="checkbox" checked style="accent-color:#2d6cdf;" />
     <div class="name">${name}</div>
     <button class="btn-mini zoom" title="Zoom">Zoom</button>
-    <button class="btn-mini remove" title="Remove">✕</button>
+
+    <button class="btn-mini more" title="Layer menu">⋮</button>
+    <div class="layer-menu" style="display:none; position:absolute; right:10px; margin-top:36px;
+        background:var(--bg-dark-2); border:1px solid var(--border-dark); border-radius:8px; overflow:hidden; z-index:5000;">
+      <button class="layer-menu-item" data-act="table" style="width:100%; text-align:left; padding:10px 12px; background:transparent; color:var(--text-light); border:0; cursor:pointer;">Show attribute table</button>
+      <button class="layer-menu-item" data-act="remove" style="width:100%; text-align:left; padding:10px 12px; background:transparent; color:var(--text-light); border:0; cursor:pointer;">Remove layer</button>
+    </div>
   `;
-  const [chk, , btnZoom, btnRemove] = row.children;
+  const chk = row.querySelector('input[type="checkbox"]');
+  const btnZoom = row.querySelector(".btn-mini.zoom");
+  const btnMore = row.querySelector(".btn-mini.more");
+  const layerMenu = row.querySelector(".layer-menu");
+
 
   chk.addEventListener("change", () => {
     if (chk.checked) layer.addTo(map); else map.removeLayer(layer);
@@ -351,11 +362,32 @@ function addLayerToList(name, layer) {
     try { map.fitBounds(layer.getBounds(), { padding: [20, 20] }); } catch {}
   });
 
-  btnRemove.addEventListener("click", () => {
-    map.removeLayer(layer);
-    userLayers.delete(id);
-    row.remove();
+  btnMore.addEventListener("click", (e) => {
+    e.stopPropagation();
+    layerMenu.style.display = (layerMenu.style.display === "none" || !layerMenu.style.display) ? "block" : "none";
   });
+
+  document.addEventListener("click", () => {
+    layerMenu.style.display = "none";
+  });
+
+  layerMenu.addEventListener("click", (e) => {
+    const item = e.target.closest(".layer-menu-item");
+    if (!item) return;
+
+    const act = item.dataset.act;
+    layerMenu.style.display = "none";
+
+    if (act === "table") {
+      openAttributeTable(name, layer);
+    }
+    if (act === "remove") {
+      map.removeLayer(layer);
+      userLayers.delete(id);
+      row.remove();
+    }
+  });
+
 
   layerList.prepend(row);
 }
@@ -439,7 +471,15 @@ wfsConnect?.addEventListener("click", async () => {
           .slice(0, 10)
           .map(k => `<b>${k}:</b> ${p[k]}`)
           .join("<br>");
-        l.bindPopup(html || name);
+
+        l.bindPopup(html);
+
+        l.on("click", () => {
+          if (attrPanel && attrPanel.style.display !== "flex") {
+            openAttributeTable("BW", window._lastDataLayer);
+          }
+          highlightTableRowByFeature(f);
+        });
       },
       pointToLayer: (_f, latlng) => L.circleMarker(latlng, { radius: 5 })
     }).addTo(map);
@@ -466,6 +506,177 @@ wfsConnect?.addEventListener("click", async () => {
   }
 });
 
+// Attribute Table Function
+const attrPanel = document.getElementById("attrPanel");
+const attrTitle = document.getElementById("attrTitle");
+const attrTable = document.getElementById("attrTable");
+const attrClose = document.getElementById("attrClose");
+
+attrClose?.addEventListener("click", () => {
+  if (attrPanel) attrPanel.style.display = "none";
+});
+
+// sorting column in attribute table (GLOBAL)
+let currentSort = { colIndex: null, dir: 1 }; // 1=asc, -1=desc
+
+function enableTableSorting() {
+  const thead = attrTable.querySelector("thead");
+  if (!thead) return;
+
+  const headers = Array.from(thead.querySelectorAll("th"));
+
+  headers.forEach((th) => {
+    const label = th.textContent.trim();
+    th.innerHTML = `
+      <span class="th-label">${escapeHtml(label)}</span>
+      <span class="th-sort" style="margin-left:6px; font-size:10px; opacity:.75;"></span>
+    `;
+    th.style.cursor = "pointer";
+    th.style.userSelect = "none";
+  });
+
+  headers.forEach((th, colIndex) => {
+    th.addEventListener("click", () => {
+      if (currentSort.colIndex === colIndex) currentSort.dir = -currentSort.dir;
+      else { currentSort.colIndex = colIndex; currentSort.dir = 1; }
+
+      headers.forEach(h => {
+        const s = h.querySelector(".th-sort");
+        if (s) s.textContent = "";
+      });
+      th.querySelector(".th-sort").textContent = (currentSort.dir === 1) ? "▲" : "▼";
+
+      const tbody = attrTable.querySelector("tbody");
+      const rows = Array.from(tbody.querySelectorAll("tr"));
+
+      rows.sort((a, b) => {
+        const va = a.children[colIndex]?.textContent.trim() ?? "";
+        const vb = b.children[colIndex]?.textContent.trim() ?? "";
+
+        const na = parseFloat(va), nb = parseFloat(vb);
+        const bothNum = !isNaN(na) && !isNaN(nb);
+
+        if (bothNum) return currentSort.dir * (na - nb);
+        return currentSort.dir * va.localeCompare(vb, undefined, { numeric: true, sensitivity: "base" });
+      });
+
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+}
+
+function openAttributeTable(layerName, layer){
+  if (!attrPanel || !attrTitle || !attrTable) return;
+
+  // Collect features
+  const feats = [];
+  layer.eachLayer(l => { if (l.feature) feats.push(l.feature); });
+
+  if (!feats.length) {
+    attrTitle.textContent = `Attribute table — ${layerName} (0 features)`;
+    attrTable.innerHTML = "<tr><td>No features loaded.</td></tr>";
+    enableTableSorting();
+    attrPanel.style.display = "flex";
+    return;
+  }
+
+  // Union of all keys (stable, GIS-like)
+  const keySet = new Set();
+  feats.forEach(f => Object.keys(f.properties || {}).forEach(k => keySet.add(k)));
+  const keys = Array.from(keySet);
+
+  // Header
+  const thead = `<thead><tr>${keys.map(k => `<th>${escapeHtml(k)}</th>`).join("")}</tr></thead>`;
+
+  // Body
+  const rows = feats.map((f, idx) => {
+    const p = f.properties || {};
+    const fid = (p.id ?? p.ID ?? p.fid ?? idx);
+    const tds = keys.map(k => `<td>${escapeHtml(String(p[k] ?? ""))}</td>`).join("");
+    return `<tr data-row="${idx}" data-fid="${escapeHtml(String(fid))}">${tds}</tr>`;
+  }).join("");
+
+  attrTitle.textContent = `Attribute table — ${layerName} (${feats.length} features)`;
+  attrTable.innerHTML = thead + `<tbody>${rows}</tbody>`;
+  enableTableSorting();
+  attrPanel.style.display = "flex";
+
+  // Row click -> zoom to feature + open popup (GIS feel)
+  attrTable.querySelectorAll("tbody tr").forEach(tr => {
+    tr.addEventListener("click", () => {
+      const i = Number(tr.dataset.row);
+      const feature = feats[i];
+      if (!feature) return;
+
+      // find corresponding Leaflet layer
+      let hitLayer = null;
+      layer.eachLayer(l => {
+        if (l.feature === feature) hitLayer = l;
+      });
+      if (!hitLayer) return;
+
+      if (hitLayer.getLatLng) {
+        map.setView(hitLayer.getLatLng(), Math.max(map.getZoom(), 16));
+        if (hitLayer.openPopup) hitLayer.openPopup();
+      } else if (hitLayer.getBounds) {
+        map.fitBounds(hitLayer.getBounds(), { padding: [20,20], maxZoom: 18 });
+        if (hitLayer.openPopup) hitLayer.openPopup();
+      }
+    });
+  });
+}
+
+//maximize attribute table
+const attrMax = document.getElementById("attrMax");
+let attrWasMaximized = false;
+
+attrMax?.addEventListener("click", () => {
+  if (!attrPanel) return;
+
+  attrWasMaximized = !attrWasMaximized;
+  attrPanel.classList.toggle("maximized", attrWasMaximized);
+  attrMax.textContent = attrWasMaximized ? "🗗" : "⬜";
+});
+
+// Highlight table row by feature
+function highlightTableRowByFeature(feature){
+  if (!feature || !attrTable) return;
+
+  const rows = attrTable.querySelectorAll("tbody tr");
+  rows.forEach(r => r.classList.remove("active"));
+
+  const fid = feature.properties?.id;
+  if (fid === undefined || fid === null) return;
+
+  const row = Array.from(rows).find(r => r.dataset.fid == fid);
+  if (!row) return;
+
+  row.classList.add("active");
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+const attrSearch = document.getElementById("attrSearch");
+
+// search button on for attribute table
+attrSearch?.addEventListener("input", () => {
+  const q = attrSearch.value.trim().toLowerCase();
+  const rows = attrTable.querySelectorAll("tbody tr");
+
+  rows.forEach(row => {
+    const text = row.textContent.toLowerCase();
+    row.style.display = text.includes(q) ? "" : "none";
+  });
+});
+
+function escapeHtml(s){
+  return (s ?? "").toString()
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#39;");
+}
+
 // Restore WFS layers for this session after reload
 async function restoreSessionLayers() {
   let saved;
@@ -490,13 +701,22 @@ async function restoreSessionLayers() {
             .slice(0, 10)
             .map(k => `<b>${k}:</b> ${p[k]}`)
             .join("<br>");
-          l.bindPopup(html || rec.name || "WFS");
+
+          l.bindPopup(html);
+
+          l.on("click", () => {
+            if (attrPanel && attrPanel.style.display !== "flex") {
+              openAttributeTable("BW", window._lastDataLayer);
+            }
+            highlightTableRowByFeature(f);
+          });
         },
         pointToLayer: (_f, latlng) => L.circleMarker(latlng, { radius: 5 })
       }).addTo(map);
 
       addLayerToList(rec.name || "WFS Layer", layer);
       window._lastDataLayer = layer;
+      window._lastLayerName = rec.name || "WFS Layer";
     } catch (err) {
       console.error("Failed to restore WFS layer", rec, err);
     }
@@ -507,6 +727,8 @@ async function restoreSessionLayers() {
 /* ====== Parking layer (backend) ====== */
 let parkingAbort = null;   // <— declare globals once
 let parkingLayer = null;
+let searchLayer = null;
+
 
 async function loadParking(opts = {}) {
   const { lat, lon, radius_km = 2 } = opts;
@@ -596,6 +818,12 @@ function highlightNearbyFromLayer(srcLayer, lat, lon, radiusKm=2){
   }).addTo(map);
 }
 
+// show point 
+function getFeatureFieldValue(feature, field) {
+  const props = (feature && feature.properties) ? feature.properties : {};
+  const v = props[field];
+  return (v === null || v === undefined) ? "" : String(v);
+}
 
 // Expose for the Refresh button in the status bar
 window.loadParking = loadParking;
@@ -782,11 +1010,17 @@ async function applyActions(actions = []) {
             preferUser: !!nearMe, // when user says “near me”
           });
 
+          let rKm = (typeof radiusKm === "number") ? radiusKm : 5;
+
+          // If user said "200m" the model might send 200 (meters) by mistake.
+          // Treat big numbers as meters and convert to km.
+          if (rKm >= 50) rKm = rKm / 1000;
+
           await loadParking({
             city,
             lat: loc.lat,
             lon: loc.lon,
-            radius_km: typeof radiusKm === "number" ? radiusKm : 5,
+            radius_km: rKm,
           });
 
           // highlight from the user's loaded layer
@@ -795,13 +1029,161 @@ async function applyActions(actions = []) {
               window._lastDataLayer,
               loc.lat,
               loc.lon,
-              typeof radiusKm === "number" ? radiusKm : 5
+              rKm
             );
           } else {
             console.warn("No WFS layer loaded via button; nothing to filter.");
           }
           // Optionally set view if not already
           map.setView([loc.lat, loc.lon], 13);
+          break;
+        }
+
+        case "findByAttribute": {
+          const layer = window._lastDataLayer;
+          if (!layer) {
+            addLog("No layer loaded yet. Add a WFS layer first.", "bot");
+            break;
+          }
+
+          const field = (a.field || "*").trim();
+          const values = Array.isArray(a.values)
+            ? a.values.map(v => String(v).toLowerCase())
+            : [];
+
+          if (!values.length) {
+            addLog("No values provided to search for.", "bot");
+            break;
+          }
+
+          // Clear previous search highlight
+          if (searchLayer) {
+            map.removeLayer(searchLayer);
+            searchLayer = null;
+          }
+
+          const hits = [];
+
+          layer.eachLayer(l => {
+            const f = l.feature;
+            if (!f || !f.properties) return;
+
+            const props = f.properties;
+
+            for (const val of values) {
+              if (field === "*") {
+                for (const k of Object.keys(props)) {
+                  const v = String(props[k] ?? "").toLowerCase();
+                  if (v === val) {
+                    hits.push(f);
+                    return;
+                  }
+                }
+              } else {
+                const v = String(props[field] ?? "").toLowerCase();
+                if (v === val) {
+                  hits.push(f);
+                  return;
+                }
+              }
+            }
+          });
+
+          if (!hits.length) {
+            addLog("No matching features found.", "bot");
+            break;
+          }
+
+          searchLayer = L.geoJSON(
+            { type: "FeatureCollection", features: hits },
+            {
+              onEachFeature: (f, l) => {
+                const p = f.properties || {};
+                const html = Object.keys(p)
+                  .slice(0, 20)
+                  .map(k => `<b>${k}:</b> ${p[k]}`)
+                  .join("<br>");
+                l.bindPopup(html || "Feature");
+              },
+              pointToLayer: (_f, ll) =>
+                L.circleMarker(ll, {
+                  radius: 9,
+                  color: "#c00",
+                  weight: 3,
+                  fillColor: "#c00",
+                  fillOpacity: 0.95
+                })
+            }
+          ).addTo(map);
+
+          map.fitBounds(searchLayer.getBounds(), {
+            padding: [20, 20],
+            maxZoom: 18
+          });
+
+          addLog(`Found ${hits.length} matching feature(s).`, "bot");
+          break;
+        }
+
+        case "openAttributeTable": {
+          const layer = window._lastDataLayer;
+          if (!layer) {
+            addLog("No layer loaded yet. Add a WFS layer first.", "bot");
+            break;
+          }
+          openAttributeTable(window._lastLayerName || "Layer", layer);
+          break;
+        }
+
+        case "filterWithin": {
+          const { place, lat, lon, radiusM } = a;
+
+          const loc = await resolveLocation({ lat, lon, place });
+          const rM = (typeof radiusM === "number" && radiusM > 0) ? radiusM : 500;
+
+          const layer = window._lastDataLayer;
+          if (!layer) {
+            addLog("No layer loaded yet. Add a WFS layer first.", "bot");
+            break;
+          }
+
+          // remove old highlight
+          if (nearbyLayer) { map.removeLayer(nearbyLayer); nearbyLayer = null; }
+
+          const center = L.latLng(loc.lat, loc.lon);
+          const hits = [];
+
+          layer.eachLayer(l => {
+            const ll = l.getLatLng ? l.getLatLng()
+                    : (l.getBounds ? l.getBounds().getCenter() : null);
+            if (!ll) return;
+            if (center.distanceTo(ll) <= rM) {
+              if (l.feature) hits.push(l.feature);
+            }
+          });
+
+          if (!hits.length) {
+            addLog(`No points found within ${rM} m of ${place || "that location"}.`, "bot");
+            break;
+          }
+
+          nearbyLayer = L.geoJSON({ type:"FeatureCollection", features:hits }, {
+            onEachFeature: (f, l) => {
+              const p = f.properties || {};
+              const html = Object.keys(p)
+                .slice(0, 20)
+                .map(k => `<b>${k}:</b> ${p[k]}`)
+                .join("<br>");
+              l.bindPopup(html || "Feature");
+            },
+            pointToLayer: (_f, ll) => L.circleMarker(ll, {
+              radius: 7, color: "#c00", weight: 2, fillColor: "#c00", fillOpacity: 0.9
+            })
+          }).addTo(map);
+
+
+          addLog(`Found ${hits.length} points within ${rM} m of ${place || "the location"}.`, "bot");
+          map.fitBounds(nearbyLayer.getBounds(), { padding: [20, 20], maxZoom: 17 });
           break;
         }
 
@@ -816,6 +1198,7 @@ async function applyActions(actions = []) {
           }).addTo(map);
           addLayerToList("WFS", layer);
           window._lastDataLayer = layer;
+          window._lastLayerName = name;
           try {
             map.fitBounds(layer.getBounds(), { padding: [20, 20] });
           } catch {}
