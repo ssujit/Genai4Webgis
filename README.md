@@ -60,3 +60,6 @@ MIT (see `LICENSE`).
 
 ## Citation
 See `CITATION.cff`.
+
+## Notes: 
+This work is part of the Master thesis topic defined by [Dr.-Ing. Sujit Kumar Sikder](https://www.ioer.de/institut/beschaeftigte/sikder) and hosted at the Leibniz Institute of Ecological Urban and Regional Development (IOER) in Dresden. Acknowledgement goes to the Prof. Dr.-Ing. Angela Blanco-Vogt at the Hochschule für Technik Stuttgart, for her insightful feedbacks.
