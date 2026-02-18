@@ -1,24 +1,46 @@
-# Master Thesis: Integrating Local Large Language Models into WebGIS: A Chat-Driven Framework for Natural-Language Interaction with Open Geospatial Data
-## Overview
+# GENIA (Geospatial Natural-language Interaction Assistant)
 
-This repository contains the code, data, and documentation, **"Integrating Local Large Language Models into WebGIS: A Chat-Driven Framework for Natural-Language Interaction with Open Geospatial Data"**.
+**Thesis title:** *Integrating Local Large Language Models into WebGIS: An Open Framework for Natural-Language Interaction.*
 
-## Project Structure (YODA Principle)
+GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) interprets user intent into **structured JSON actions**, and the **Leaflet frontend executes** those actions deterministically.
 
-The repository follows the YODA (YOur Data Organized Automatically) principle for reproducible research. The main folders are:
+## Core design
+- **LLM = interpreter** (proposes actions)
+- **Frontend = executor** (runs predefined map functions)
+- **Backend = controller** (schema validation + safe fallback + explainability metadata)
 
-**File Descriptions:**
-- `code/`: All analysis scripts and code.
-- `data/raw/`: Unmodified, original data.
-- `data/processed/`: Data after cleaning or transformation.
-- `docs/`: Project documentation and thesis drafts.
-- `envs/`: Computational environments.
-- `results/`: Generated outputs, plots, and tables.
-- CHANGELOG.md
-- README.md
+## Repository layout
+- `backend/` Flask backend (LLM call, schema validation, fallback, `/chat`, `/geocode`)
+- `frontend/` UI assets (Leaflet chat-driven WebGIS)
+- `schema/` JSON schema for the response payload
+- `docs/` setup notes, diagrams, screenshots
+- `evaluation/` prompts/use cases + results summaries
 
-For more on YODA, see the [DataLad Handbook](https://handbook.datalad.org/en/latest/basics/101-127-yoda.html).
+## Quick start
 
+### 1) Start Ollama
+```bash
+ollama serve
+```
 
+### 2) Backend
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env
+python app.py
+```
 
+### 3) Open the app
+Visit `http://127.0.0.1:5000/`
 
+## Configuration
+See `backend/.env.example`.
+
+## License
+MIT (see `LICENSE`).
+
+## Citation
+See `CITATION.cff`.

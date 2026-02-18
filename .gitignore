@@ -1,22 +1,31 @@
-# Python virtual environment
-venv/
-.venv/
-
-# Python cache
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 
-# Secrets
+# Virtualenv
+.venv/
+venv/
+ENV/
+
+# Environment variables / secrets
 .env
-.env.*
-api key.txt
-apikey.txt
-apikey.json
+*.env
 
-# OS files
+# Logs
+*.log
+
+# OS / editor
 .DS_Store
 Thumbs.db
-
-# Editor/IDE files
 .vscode/
 .idea/
+
+# Local outputs (keep the folder README files)
+results/*
+!results/README.md
+
+data/raw/*
+!data/raw/README.md
+
+data/processed/*
+!data/processed/README.md

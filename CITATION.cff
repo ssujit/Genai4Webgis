@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+title: "GENIA: Integrating Local Large Language Models into WebGIS"
+message: "If you use this software, please cite it."
+type: software
+authors:
+  - family-names: Rahaman
+    given-names: Md Ashifur
+version: 1.0.0
+date-released: 2026-02-18
+license: MIT
+keywords:
+  - WebGIS
+  - Natural-language interaction
+  - LLM
+  - Ollama
+  - OGC
+  - WFS
