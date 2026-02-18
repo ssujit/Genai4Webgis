@@ -15,11 +15,8 @@ GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) inter
 - **Backend = controller** (schema validation + safe fallback + explainability metadata)
 
 ## Repository layout
-- `backend/` Flask backend (LLM call, schema validation, fallback, `/chat`, `/geocode`)
-- `frontend/` UI assets (Leaflet chat-driven WebGIS)
-- `schema/` JSON schema for the response payload
+- `code/` Flask backend (LLM call, schema validation, fallback, `/chat`, `/geocode`), UI assets (Leaflet chat-driven WebGIS)
 - `docs/` setup notes, diagrams, screenshots
-- `evaluation/` prompts/use cases + results summaries
 
 ## Quick start
 
