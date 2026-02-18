@@ -2,6 +2,10 @@
 
 GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) interprets user intent into **structured JSON actions**, and the **Leaflet frontend executes** those actions deterministically.
 
+![](asset\screenshoot_ui.png)
+
+
+
 ## Core design
 - **LLM = interpreter** (proposes actions)
 - **Frontend = executor** (runs predefined map functions)
@@ -32,7 +36,7 @@ Optional (recommended):
 
 ## Quick start
 
-### 1 Start Ollama
+### 1. Start Ollama
 ```bash
 ollama serve
 ```
@@ -49,6 +53,15 @@ python app.py
 
 ### 3 Open the app
 Visit `http://your local host`
+
+### Example data import
+
+Use "Add data" button and add this example WFS: 
+
+```
+https://api.mobidata-bw.de/geoserver/MobiData-BW/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=MobiData-BW%3Acharge_points&outputFormat=application%2Fjson&maxFeatures=50
+
+```
 
 ## Configuration
 See `backend/.env.example`.
