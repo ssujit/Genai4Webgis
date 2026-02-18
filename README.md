@@ -18,12 +18,12 @@ GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) inter
 
 ## Quick start
 
-### 1) Start Ollama
+### 1 Start Ollama
 ```bash
 ollama serve
 ```
 
-### 2) Backend
+### 2 Backend
 ```bash
 cd backend
 python -m venv .venv
@@ -33,7 +33,7 @@ cp .env.example .env
 python app.py
 ```
 
-### 3) Open the app
+### 3 Open the app
 Visit `http://127.0.0.1:5000/`
 
 ## Configuration
