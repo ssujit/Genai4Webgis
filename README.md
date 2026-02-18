@@ -1,7 +1,5 @@
 # GENIA (Geospatial Natural-language Interaction Assistant)
 
-**Thesis title:** *Integrating Local Large Language Models into WebGIS: An Open Framework for Natural-Language Interaction.*
-
 GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) interprets user intent into **structured JSON actions**, and the **Leaflet frontend executes** those actions deterministically.
 
 ## Core design
@@ -50,7 +48,7 @@ python app.py
 ```
 
 ### 3 Open the app
-Visit `http://127.0.0.1:5000/`
+Visit `http://your local host`
 
 ## Configuration
 See `backend/.env.example`.
@@ -62,4 +60,4 @@ MIT (see `LICENSE`).
 See `CITATION.cff`.
 
 ## Notes: 
-This work is part of the Master thesis topic defined by [Dr.-Ing. Sujit Kumar Sikder](https://www.ioer.de/institut/beschaeftigte/sikder) and hosted at the Leibniz Institute of Ecological Urban and Regional Development (IOER) in Dresden. Acknowledgement goes to the Prof. Dr.-Ing. Angela Blanco-Vogt at the Hochschule für Technik Stuttgart, for her insightful feedbacks.
+This software is part of the Master thesis topic defined by [Dr.-Ing. Sujit Kumar Sikder](https://www.ioer.de/institut/beschaeftigte/sikder) and hosted at the Leibniz Institute of Ecological Urban and Regional Development (IOER) in Dresden. The **Thesis title:** *Integrating Local Large Language Models into WebGIS: An Open Framework for Natural Language Interaction.* conducted by [Mr. Rahaman](https://de.linkedin.com/in/mdashifurrahaman).  Acknowledgement goes to the Prof. Dr.-Ing. Angela Blanco-Vogt at the Hochschule für Technik Stuttgart, for her kind insightful feedbacks and co-operation.
