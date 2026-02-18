@@ -1,7 +1,7 @@
 <<<<<<< HEAD
 # GENIA (Geospatial Natural-language Interaction Assistant)
 =======
-# Master Thesis: Integrating Local Large Language Models into WebGIS: An Open Framework for Natural-Language Interaction.
+# Master Thesis= Integrating Local Large Language Models into WebGIS: An Open Framework for Natural-Language Interaction.
 ## Overview
 
 This repository contains the code, data, and documentation, **"Integrating Local Large Language Models into WebGIS: An Open Framework for Natural-Language Interaction."**.
