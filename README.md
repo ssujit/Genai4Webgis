@@ -16,6 +16,22 @@ GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) inter
 - `docs/` setup notes, diagrams, screenshots
 - `evaluation/` prompts/use cases + results summaries
 
+## Requirements
+
+To run GENIA locally you need:
+
+- **Python 3.10+** (Flask backend)
+- **pip** (Python package manager)
+- **Ollama** (to run a local LLM)
+- A local LLM model pulled in Ollama (e.g., `llama3.1`, `mistral`, etc.)
+- A modern browser (Chrome/Firefox/Edge) to run the Leaflet frontend
+- Internet access (for WFS / geocoding / routing services, depending on your config)
+
+Optional (recommended):
+- **Git** (clone + version control)
+- **VS Code** (or any editor)
+
+
 ## Quick start
 
 ### 1 Start Ollama
