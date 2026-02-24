@@ -2,7 +2,7 @@
 
 GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) interprets user intent into **structured JSON actions**, and the **Leaflet frontend executes** those actions deterministically.
 
-![](asset\screenshoot_ui.png)
+![](asset/screenshoot_ui.png)
 
 
 
