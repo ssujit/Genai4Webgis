@@ -5,10 +5,10 @@ type: software
 
 authors:
 
-family-names: Rahaman
-given-names: Md Ashifur
-family-names: Sikder
-given-names: Sujit Kumar
+* family-names: Rahaman
+  given-names: Md Ashifur
+* family-names: Sikder
+  given-names: Sujit Kumar
 
 version: "1.0.0"
 date-released: 2026-02-18
@@ -16,11 +16,11 @@ license: MIT
 
 keywords:
 
-WebGIS
-Natural-language interaction
-Large Language Models
-Ollama
-OGC
-WFS
+* WebGIS
+* Natural-language interaction
+* Large Language Models
+* Ollama
+* OGC
+* WFS
 
 doi: "10.25598/agit/2026-32"
