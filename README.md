@@ -4,6 +4,8 @@ GENIA is a chat-driven WebGIS prototype where a **local LLM** (via Ollama) inter
 
 ![](asset/screenshoot_ui.png)
 
+# Publication
+Rahaman, A.; Sikder, S. K. (2026): **Integrating Local Large Language Models intoWebGIS: An Open-source Framework for Natural Language Interaction.** In: AGIT Conference, 2(1), 116-119. [https://doi.org/10.25598/agit/2026-32](https://doi.org/10.25598/agit/2026-32)
 
 
 ## Core design
